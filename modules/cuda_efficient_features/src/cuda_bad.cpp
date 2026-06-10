@@ -21,7 +21,12 @@ limitations under the License.
 
 #include "cuda_efficient_descriptors.h"
 
+// Include cuda_to_hip.h FIRST to set up the type mappings before OpenCV headers
+#include "cuda_to_hip.h"
+
+#ifndef USE_HIP
 #include <opencv2/cudaarithm.hpp>
+#endif
 #include <opencv2/core/cuda_stream_accessor.hpp>
 
 #include "cuda_bad_internal.h"

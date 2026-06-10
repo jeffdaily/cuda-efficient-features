@@ -19,12 +19,19 @@ limitations under the License.
 //     Revisiting binary local image description for resource limited devices.
 //     IEEE Robotics and Automation Letters, 2021.
 
+// cuda_to_hip.h MUST be included FIRST to define CUDA->HIP mappings
+#include "cuda_to_hip.h"
+
 #include "cuda_bad_internal.h"
 
-#include <cuda_runtime.h>
+#ifdef USE_HIP
+#include <opencv2/core/cuda_stream_accessor.hpp>
+#include "hip_kernels.h"
+#else
 #include <device_launch_parameters.h>
 
 #include <opencv2/cudev/grid/detail/integral.hpp>
+#endif
 
 #include "cuda_macro.h"
 
@@ -253,11 +260,16 @@ __global__ void computeBADKernel(const PtrStepSzi integral, const float4* keypoi
 	const int frameW = integral.cols - 1;
 	const int frameH = integral.rows - 1;
 
-	const float4 kpt = keypoints[kpIdx];
-	const float x = kpt.x;
-	const float y = kpt.y;
-	const float kpSize = kpt.z;
-	const float angle = kpt.w;
+	// Move keypoint load inside bounds check to avoid OOB read
+	float x = 0, y = 0, kpSize = 0, angle = 0;
+	if (kpIdx < nkeypoints)
+	{
+		const float4 kpt = keypoints[kpIdx];
+		x = kpt.x;
+		y = kpt.y;
+		kpSize = kpt.z;
+		angle = kpt.w;
+	}
 
 	uchar byte = 0;
 	BoxPairParams box_pair;
@@ -302,18 +314,21 @@ __global__ void computeBADKernel(const PtrStepSzi integral, const float4* keypoi
 			// Set the bit to 1 if the response function is less or equal to the threshod
 			byte |= (areaResponseFun <= (thresholds_[boxIdx] * (side * side))) << bitIdx;
 		}  // End of else (of pixels in the image center)
-
-		byte |= __shfl_xor_sync(0xffffffff, byte, 4);
-		byte |= __shfl_xor_sync(0xffffffff, byte, 2);
-		byte |= __shfl_xor_sync(0xffffffff, byte, 1);
-
-		if (bitIdx == 0)
-		{
-			const int byteIdx = boxIdx / 8;
-			descriptors(kpIdx, byteIdx) = byte;
-		}
 	}
-}
+
+	// Shuffles must be executed by ALL threads in the wave, even those with
+	// kpIdx >= nkeypoints. Move outside the if-block to avoid wave divergence hang.
+	byte |= __shfl_xor_sync(FULL_WARP_MASK, byte, 4);
+	byte |= __shfl_xor_sync(FULL_WARP_MASK, byte, 2);
+	byte |= __shfl_xor_sync(FULL_WARP_MASK, byte, 1);
+
+	// Only valid keypoints write to descriptors
+	if (kpIdx < nkeypoints && bitIdx == 0)
+	{
+		const int byteIdx = boxIdx / 8;
+		descriptors(kpIdx, byteIdx) = byte;
+	}
+}  // End of computeBADKernel
 
 void loadBoxPairParams(int paramSIze)
 {
@@ -349,9 +364,11 @@ void computeBAD(const GpuMat& integral, const GpuMat& keypoints, GpuMat& descrip
 
 void calcIntegralImage(const GpuMat& src, GpuMat& dst, Stream& stream)
 {
+#ifdef USE_HIP
+	hip::calcIntegralImage(src, dst, StreamAccessor::getStream(stream));
+#else
 	using namespace cudev;
 
-	//CV_Assert(dst.rows == src.rows + 1 && dst.cols == src.cols + 1 && dst.type() == CV_32S);
 	const int rows = src.rows;
 	const int cols = src.cols;
 
@@ -360,6 +377,7 @@ void calcIntegralImage(const GpuMat& src, GpuMat& dst, Stream& stream)
 
 	GpuMat dstROI = dst(Rect(1, 1, src.cols, src.rows));
 	integral_detail::integral(globPtr<uchar>(src), globPtr<int>(dstROI), rows, cols, StreamAccessor::getStream(stream));
+#endif
 }
 
 } // namespace gpu

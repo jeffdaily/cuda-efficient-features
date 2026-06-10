@@ -18,13 +18,27 @@ limitations under the License.
 #define __CUDA_MACRO_H__
 
 #include <cstdio>
-#include <cuda.h>
+#include "cuda_to_hip.h"
 
+#if !defined(USE_HIP) && !defined(__HIP_PLATFORM_AMD__)
+#include <cuda.h>
+#endif
+
+#ifdef USE_HIP
+#define CUDA_CHECK(err) \
+do {\
+	cudaError_t _err = (err); \
+	if (_err != cudaSuccess) { \
+		printf("[CUDA Error] %s (code: %d) at %s:%d\n", cudaGetErrorString(_err), _err, __FILE__, __LINE__); \
+	} \
+} while (0)
+#else
 #define CUDA_CHECK(err) \
 do {\
 	if (err != cudaSuccess) { \
 		printf("[CUDA Error] %s (code: %d) at %s:%d\n", cudaGetErrorString(err), err, __FILE__, __LINE__); \
 	} \
 } while (0)
+#endif
 
 #endif // !__CUDA_MACRO_H__

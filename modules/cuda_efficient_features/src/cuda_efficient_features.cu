@@ -14,19 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// cuda_to_hip.h MUST be included FIRST to define CUDA->HIP mappings
+#include "cuda_to_hip.h"
+
 #include "cuda_efficient_features.h"
 
 #include <opencv2/core/cuda.hpp>
-
-#include <cuda_runtime.h>
+#ifndef USE_HIP
 #include <device_launch_parameters.h>
+#endif
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 
 #include "cuda_macro.h"
-
 namespace cv
 {
 namespace cuda
@@ -266,7 +268,11 @@ static void exclusiveScan(const int* src, int* dst, int size, cudaStream_t strea
 {
 	auto ptrSrc = thrust::device_pointer_cast(src);
 	auto ptrDst = thrust::device_pointer_cast(dst);
+#ifdef USE_HIP
+	thrust::exclusive_scan(thrust::hip::par.on(stream), ptrSrc, ptrSrc + size, ptrDst);
+#else
 	thrust::exclusive_scan(thrust::cuda::par.on(stream), ptrSrc, ptrSrc + size, ptrDst);
+#endif
 }
 
 int radiusSuppressionBufferSize(Size imgSize, int npoints)
@@ -350,7 +356,11 @@ void limitPoints(GpuMat& points, int maxpoints, cudaStream_t stream)
 	auto locations = thrust::device_pointer_cast(points.ptr<short2>(0));
 	auto responses = thrust::device_pointer_cast(points.ptr<float>(1));
 
+#ifdef USE_HIP
+	thrust::sort_by_key(thrust::hip::par.on(stream), responses, responses + npoints, locations, thrust::greater<float>());
+#else
 	thrust::sort_by_key(thrust::cuda::par.on(stream), responses, responses + npoints, locations, thrust::greater<float>());
+#endif
 
 	points.cols = maxpoints;
 

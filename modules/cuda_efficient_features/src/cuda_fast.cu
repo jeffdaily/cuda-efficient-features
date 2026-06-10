@@ -14,12 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// cuda_to_hip.h MUST be included FIRST to define __CUDACC__ for HIP builds
+// so that OpenCV's cuda_types.hpp gets proper __host__ __device__ attributes.
+#include "cuda_to_hip.h"
+
 #include "cuda_efficient_features.h"
 
 #include <opencv2/core/cuda.hpp>
 
-#include <cuda_runtime.h>
+#ifndef USE_HIP
 #include <device_launch_parameters.h>
+#endif
 
 #include "cuda_macro.h"
 

@@ -19,8 +19,8 @@ limitations under the License.
 //     Revisiting binary local image description for resource limited devices.
 //     IEEE Robotics and Automation Letters, 2021.
 
+#include "cuda_to_hip.h"
 #include <opencv2/core/cuda.hpp>
-#include <cuda_runtime.h>
 
 namespace cv
 {

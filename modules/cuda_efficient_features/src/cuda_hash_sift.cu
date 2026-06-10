@@ -19,10 +19,16 @@ limitations under the License.
 //     Revisiting binary local image description for resource limited devices.
 //     IEEE Robotics and Automation Letters, 2021.
 
+// cuda_to_hip.h MUST be included FIRST to define CUDA->HIP mappings
+#include "cuda_to_hip.h"
+
 #include "cuda_hash_sift_internal.h"
 
-#include <cuda_runtime.h>
+#ifdef USE_HIP
+#include <opencv2/core/cuda.hpp>
+#else
 #include <device_launch_parameters.h>
+#endif
 
 #include "cuda_macro.h"
 
@@ -180,20 +186,26 @@ static __device__ inline float normsq(float x, float y)
 
 static __device__ void normalizeDescriptors(float* descriptors)
 {
-	if (threadIdx.y != 0)
-		return;
-
+	// Only threadIdx.y == 0 does the actual computation, but ALL threads
+	// must participate in the wave shuffle on AMD GPU (wave64). Non-computing
+	// threads contribute 0 to the shuffle and ignore the result.
 	float sum = 0.f;
-	for (int i = threadIdx.x; i < DESCRIPTOR_SIZE; i += WARP_SIZE)
-		sum += squared(descriptors[i]);
+	if (threadIdx.y == 0) {
+		for (int i = threadIdx.x; i < DESCRIPTOR_SIZE; i += WARP_SIZE)
+			sum += squared(descriptors[i]);
+	}
 
+	// All threads participate in shuffle (required for wave64)
 	for (int mask = 16; mask > 0; mask /= 2)
-		sum += __shfl_xor_sync(0xffffffff, sum, mask);
+		sum += __shfl_xor_sync(FULL_WARP_MASK, sum, mask);
 
-	const float norm = ::max(sqrtf(sum), FLT_EPSILON);
-	const float scale = 1.f / norm;
-	for (int i = threadIdx.x; i < DESCRIPTOR_SIZE; i += WARP_SIZE)
-		descriptors[i] = scale * descriptors[i];
+	// Only threadIdx.y == 0 writes back
+	if (threadIdx.y == 0) {
+		const float norm = ::max(sqrtf(sum), FLT_EPSILON);
+		const float scale = 1.f / norm;
+		for (int i = threadIdx.x; i < DESCRIPTOR_SIZE; i += WARP_SIZE)
+			descriptors[i] = scale * descriptors[i];
+	}
 }
 
 static __device__ inline void separateIF(float value, int* vi, float* vf)
@@ -445,7 +457,11 @@ void computePatchSIFTs(const GpuMat& image, const GpuMat& keypoints, GpuMat& res
 
 	sigma = sqrt(max(sigma * sigma - SIFT_INIT_SIGMA * SIFT_INIT_SIGMA, 0.01));
 
+#ifdef USE_HIP
+	computePatchSIFTKernel<<<dimGrid, dimBlock, 0, stream>>>(image, PtrStepSz<KeyPoint>(keypoints.rows, keypoints.cols, reinterpret_cast<KeyPoint*>(const_cast<uchar*>(keypoints.data)), keypoints.step), responses, croppingScale, keypointScale, sigma);
+#else
 	computePatchSIFTKernel<<<dimGrid, dimBlock, 0, stream>>>(image, keypoints, responses, croppingScale, keypointScale, sigma);
+#endif
 
 	CUDA_CHECK(cudaGetLastError());
 }

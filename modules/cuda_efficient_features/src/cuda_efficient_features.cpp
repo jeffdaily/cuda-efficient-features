@@ -16,9 +16,16 @@ limitations under the License.
 
 #include "cuda_efficient_features.h"
 
+// Include cuda_to_hip.h FIRST to set up the type mappings before OpenCV headers
+#include "cuda_to_hip.h"
+
+#ifdef USE_HIP
+#include "hip_kernels.h"
+#else
 #include <opencv2/cudafilters.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
+#endif
 #include <opencv2/core/cuda_stream_accessor.hpp>
 
 #include "device_buffer.h"
@@ -75,11 +82,18 @@ void getInputMat(InputArray src, GpuMat& dst, Stream& stream)
 	case _InputArray::KindFlag::MAT:
 		dst.upload(src, stream);
 		break;
+#ifndef USE_HIP
 	case _InputArray::KindFlag::CUDA_GPU_MAT:
 		dst = src.getGpuMat();
 		break;
+#endif
 	default:
+#ifdef USE_HIP
+		// For HIP builds, we should only get MAT inputs
+		CV_Error(Error::StsBadArg, "Unsupported input kind for HIP build");
+#else
 		CV_Error(Error::StsBadArg, "Unsupported");
+#endif
 	}
 }
 
@@ -90,12 +104,21 @@ void getOutputMat(OutputArray src, GpuMat& dst, int rows, int cols, int type)
 	case _InputArray::KindFlag::MAT:
 		dst.create(rows, cols, type);
 		break;
+#ifndef USE_HIP
 	case _InputArray::KindFlag::CUDA_GPU_MAT:
 		src.create(rows, cols, type);
 		dst = src.getGpuMat();
 		break;
+#endif
 	default:
+#ifdef USE_HIP
+		// For HIP builds with unknown kind (likely our GpuMat wrapped incorrectly),
+		// just allocate the internal buffer
+		dst.create(rows, cols, type);
+		break;
+#else
 		CV_Error(Error::StsBadArg, "Unsupported");
+#endif
 	}
 }
 
@@ -151,7 +174,11 @@ static void calcImagePyramid(const GpuMat& image, std::vector<GpuMat>& images, s
 		const float invScale = 1.f / scale;
 		const int h = cvRound(invScale * image.rows);
 		const int w = cvRound(invScale * image.cols);
+#ifdef USE_HIP
+		hip::resize(images[s - 1], images[s], Size(w, h), StreamAccessor::getStream(stream));
+#else
 		resize(images[s - 1], images[s], Size(w, h), 0, 0, INTER_LINEAR, stream);
+#endif
 		scales[s] = scale;
 	}
 }
@@ -181,6 +208,33 @@ static void createMask(GpuMat& mask, Size imgSize, int border, Stream& stream)
 	mask(ROI).setTo(Scalar::all(255), stream);
 }
 
+#ifdef USE_HIP
+static void convertGpuMat(const GpuMat& src, std::vector<KeyPoint>& dst)
+{
+	Mat tmp;
+	src.download(tmp);
+
+	const Vec2s* points = tmp.ptr<Vec2s>(EfficientFeatures::LOCATION_ROW);
+	const float* responses = tmp.ptr<float>(EfficientFeatures::RESPONSE_ROW);
+	const float* angles = tmp.ptr<float>(EfficientFeatures::ANGLE_ROW);
+	const int* octaves = tmp.ptr<int>(EfficientFeatures::OCTAVE_ROW);
+	const float* sizes = tmp.ptr<float>(EfficientFeatures::SIZE_ROW);
+
+	const int nkeypoints = tmp.cols;
+	dst.resize(nkeypoints);
+	for (int i = 0; i < nkeypoints; i++)
+	{
+		KeyPoint kpt;
+		kpt.pt = Point2f(points[i][0], points[i][1]);
+		kpt.response = responses[i];
+		kpt.angle = angles[i];
+		kpt.octave = octaves[i];
+		kpt.size = sizes[i];
+		dst[i] = kpt;
+	}
+}
+
+#endif
 class EfficientFeaturesImpl : public EfficientFeatures
 {
 public:
@@ -190,14 +244,20 @@ public:
 		nlevels_(nlevels), firstLevel_(firstLevel), fastThreshold_(fastThreshold), nonmaxRadius_(nonmaxRadius), descriptorType_(descriptorType)
 	{
 		describer_ = createDescriber(descriptorType);
+#ifndef USE_HIP
 		filter_ = cuda::createGaussianFilter(CV_8UC1, -1, Size(7, 7), 2, 2, BORDER_REFLECT_101);
+#endif
 		h_buffer_.create(1, 16, CV_32S);
 	}
 
 	void detect(InputArray image, std::vector<KeyPoint>& keypoints, InputArray mask) override
 	{
 		detectAsync(image, keypoints_, mask, Stream::Null());
+#ifdef USE_HIP
+		convertGpuMat(keypoints_, keypoints);
+#else
 		convert(keypoints_, keypoints);
+#endif
 	}
 
 	void compute(InputArray image, std::vector<KeyPoint>& keypoints, OutputArray descriptors) override
@@ -209,7 +269,11 @@ public:
 		bool useProvidedKeypoints) override
 	{
 		detectAndComputeAsync(image, mask, keypoints_, descriptors, useProvidedKeypoints, Stream::Null());
+#ifdef USE_HIP
+		convertGpuMat(keypoints_, keypoints);
+#else
 		convert(keypoints_, keypoints);
+#endif
 	}
 
 	void detectAsync(InputArray image, OutputArray keypoints, InputArray mask, Stream& stream) override
@@ -302,7 +366,11 @@ public:
 			if (needDescriptors)
 			{
 				GpuMat descriptors = descriptors_.rowRange(dstRange);
+#ifdef USE_HIP
+				hip::gaussianBlur7x7(imagePyr_[s], blurPyr_[s], StreamAccessor::getStream(stream));
+#else
 				filter_->apply(imagePyr_[s], blurPyr_[s], stream);
+#endif
 				describer_->computeAsync(blurPyr_[s], keypoints, descriptors, stream);
 			}
 
@@ -325,8 +393,13 @@ public:
 		Mat tmp;
 		if (src.kind() == _InputArray::KindFlag::MAT)
 			tmp = src.getMat();
+#ifndef USE_HIP
 		else if (src.kind() == _InputArray::KindFlag::CUDA_GPU_MAT)
 			src.getGpuMat().download(tmp);
+#else
+		else
+			CV_Error(Error::StsBadArg, "Unsupported input kind for convert");
+#endif
 
 		const Vec2s* points = tmp.ptr<Vec2s>(LOCATION_ROW);
 		const float* responses = tmp.ptr<float>(RESPONSE_ROW);
@@ -400,7 +473,9 @@ private:
 	std::vector<float> scales_;
 	std::vector<int> nfeaturesPerLevel_;
 	Ptr<EfficientDescriptorsAsync> describer_;
+#ifndef USE_HIP
 	Ptr<cuda::Filter> filter_;
+#endif
 };
 
 Ptr<EfficientFeatures> EfficientFeatures::create(int nfeatures, float scaleFactor, int nlevels,

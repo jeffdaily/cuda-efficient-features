@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include "cuda_to_hip.h"
 #include "device_buffer.h"
 
 #include <opencv2/core/cuda.hpp>
-#include <cuda_runtime.h>
 
 #include "cuda_macro.h"
 

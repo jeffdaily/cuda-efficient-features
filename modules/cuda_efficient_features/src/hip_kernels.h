@@ -1,5 +1,5 @@
 /*
-Copyright 2023 Fixstars Corporation
+Copyright 2026 Advanced Micro Devices, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,44 +14,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#ifndef __DEVICE_BUFFER_H__
-#define __DEVICE_BUFFER_H__
+#ifndef __HIP_KERNELS_H__
+#define __HIP_KERNELS_H__
 
 #ifdef USE_HIP
-#include <opencv2/core/cuda.hpp>
-#else
+
+#include <hip/hip_runtime.h>
 #include <opencv2/core.hpp>
-#endif
+// Forward declare GpuMat - full definition comes from <opencv2/core/cuda.hpp>
+namespace cv { namespace cuda { class GpuMat; } }
 
 namespace cv
 {
 namespace cuda
 {
-
-class DeviceBuffer
+namespace hip
 {
-public:
 
-	// non-copiable
-	//DeviceBuffer(const DeviceBuffer&) = delete;
-	//DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+void gaussianBlur7x7(const GpuMat& src, GpuMat& dst, hipStream_t stream);
+void resize(const GpuMat& src, GpuMat& dst, Size dstSize, hipStream_t stream);
+void calcIntegralImage(const GpuMat& src, GpuMat& dst, hipStream_t stream);
 
-	DeviceBuffer();
-	~DeviceBuffer();
-
-	void* allocate(size_t size);
-	void* allocate(int rows, int cols, int type);
-	GpuMat createMat(int rows, int cols, int type);
-
-	void release();
-
-private:
-
-	void* data;
-	size_t capacity;
-};
-
+} // namespace hip
 } // namespace cuda
 } // namespace cv
 
-#endif // !__DEVICE_BUFFER_H__
+#endif // USE_HIP
+
+#endif // __HIP_KERNELS_H__

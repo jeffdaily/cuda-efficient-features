@@ -21,9 +21,18 @@ limitations under the License.
 
 #include "cuda_efficient_descriptors.h"
 
+// Include cuda_to_hip.h FIRST to set up the type mappings before OpenCV headers
+#include "cuda_to_hip.h"
+
+#ifndef USE_HIP
 #include <opencv2/cudaarithm.hpp>
+#endif
 #include <opencv2/core/cuda_stream_accessor.hpp>
+#ifdef USE_HIP
+#include <hipblas/hipblas.h>
+#else
 #include <cublas_v2.h>
+#endif
 
 #include "cuda_hash_sift_internal.h"
 #include "cuda_efficient_features_internal.h"
@@ -34,24 +43,70 @@ namespace cv
 namespace cuda
 {
 
-#define CUBLAS_CHECK(err) \
+#ifdef USE_HIP
+#define BLAS_CHECK(err) \
+do {\
+	if (err != HIPBLAS_STATUS_SUCCESS) { \
+		printf("[HIPBLAS Error] (code: %d) at %s:%d\n", err, __FILE__, __LINE__); \
+	} \
+} while (0)
+
+using blasHandle_t = hipblasHandle_t;
+using blasOperation_t = hipblasOperation_t;
+using blasStream_t = hipStream_t;
+constexpr blasOperation_t BLAS_OP_T = HIPBLAS_OP_T;
+constexpr blasOperation_t BLAS_OP_N = HIPBLAS_OP_N;
+
+inline hipblasStatus_t blasCreate(blasHandle_t* handle) { return hipblasCreate(handle); }
+inline hipblasStatus_t blasDestroy(blasHandle_t handle) { return hipblasDestroy(handle); }
+inline hipblasStatus_t blasSetPointerMode(blasHandle_t handle, hipblasPointerMode_t mode)
+{ return hipblasSetPointerMode(handle, mode); }
+inline hipblasStatus_t blasSetStream(blasHandle_t handle, blasStream_t stream)
+{ return hipblasSetStream(handle, stream); }
+inline hipblasStatus_t blasSgemm(blasHandle_t handle, blasOperation_t transa, blasOperation_t transb,
+	int m, int n, int k, const float* alpha, const float* A, int lda, const float* B, int ldb,
+	const float* beta, float* C, int ldc)
+{ return hipblasSgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc); }
+constexpr auto BLAS_POINTER_MODE_HOST = HIPBLAS_POINTER_MODE_HOST;
+
+#else // CUDA
+#define BLAS_CHECK(err) \
 do {\
 	if (err != CUBLAS_STATUS_SUCCESS) { \
 		printf("[CUBLAS Error] (code: %d) at %s:%d\n", err, __FILE__, __LINE__); \
 	} \
 } while (0)
 
-static void hashSIFTGemm(const GpuMat& src1, const GpuMat& src2, GpuMat& dst, const cublasHandle_t& handle)
+using blasHandle_t = cublasHandle_t;
+using blasOperation_t = cublasOperation_t;
+using blasStream_t = cudaStream_t;
+constexpr blasOperation_t BLAS_OP_T = CUBLAS_OP_T;
+constexpr blasOperation_t BLAS_OP_N = CUBLAS_OP_N;
+
+inline cublasStatus_t blasCreate(blasHandle_t* handle) { return cublasCreate_v2(handle); }
+inline cublasStatus_t blasDestroy(blasHandle_t handle) { return cublasDestroy_v2(handle); }
+inline cublasStatus_t blasSetPointerMode(blasHandle_t handle, cublasPointerMode_t mode)
+{ return cublasSetPointerMode_v2(handle, mode); }
+inline cublasStatus_t blasSetStream(blasHandle_t handle, blasStream_t stream)
+{ return cublasSetStream_v2(handle, stream); }
+inline cublasStatus_t blasSgemm(blasHandle_t handle, blasOperation_t transa, blasOperation_t transb,
+	int m, int n, int k, const float* alpha, const float* A, int lda, const float* B, int ldb,
+	const float* beta, float* C, int ldc)
+{ return cublasSgemm_v2(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc); }
+constexpr auto BLAS_POINTER_MODE_HOST = CUBLAS_POINTER_MODE_HOST;
+#endif
+
+static void hashSIFTGemm(const GpuMat& src1, const GpuMat& src2, GpuMat& dst, const blasHandle_t& handle)
 {
 	CV_Assert( src1.type() == CV_32FC1 );
 	CV_Assert( src1.cols == src2.cols );
 
 	const float alphaf = 1.0f;
 	const float betaf = 0.0f;
-	const cublasOperation_t transa = CUBLAS_OP_T;
-	const cublasOperation_t transb = CUBLAS_OP_N;
+	const blasOperation_t transa = BLAS_OP_T;
+	const blasOperation_t transb = BLAS_OP_N;
 
-	CUBLAS_CHECK( cublasSgemm_v2(handle, transa, transb, src2.rows, src1.rows, src2.cols,
+	BLAS_CHECK( blasSgemm(handle, transa, transb, src2.rows, src1.rows, src2.cols,
 		&alphaf,
 		src2.ptr<float>(), static_cast<int>(src2.step / sizeof(float)),
 		src1.ptr<float>(), static_cast<int>(src1.step / sizeof(float)),
@@ -65,19 +120,19 @@ public:
 
 	MatmulAndSign()
 	{
-		CUBLAS_CHECK( cublasCreate_v2(&handle_) );
-		CUBLAS_CHECK( cublasSetPointerMode_v2(handle_, CUBLAS_POINTER_MODE_HOST) );
+		BLAS_CHECK( blasCreate(&handle_) );
+		BLAS_CHECK( blasSetPointerMode(handle_, BLAS_POINTER_MODE_HOST) );
 	}
 
 	~MatmulAndSign()
 	{
-		CUBLAS_CHECK( cublasDestroy_v2(handle_) );
+		BLAS_CHECK( blasDestroy(handle_) );
 	}
 
 	void operator()(const GpuMat& responses, const GpuMat& bMatrix, GpuMat& descriptors, Stream& stream)
 	{
 		CV_Assert(responses.rows == descriptors.rows);
-		CUBLAS_CHECK( cublasSetStream_v2(handle_, StreamAccessor::getStream(stream)) );
+		BLAS_CHECK( blasSetStream(handle_, StreamAccessor::getStream(stream)) );
 
 		GpuMat tmp = bufTmp_.createMat(responses.rows, bMatrix.rows, responses.type());
 		hashSIFTGemm(responses, bMatrix, tmp, handle_);
@@ -87,7 +142,7 @@ public:
 private:
 
 	DeviceBuffer bufTmp_;
-	cublasHandle_t handle_;
+	blasHandle_t handle_;
 };
 
 class HashSIFTImpl : public HashSIFT

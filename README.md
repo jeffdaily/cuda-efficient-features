@@ -78,7 +78,8 @@ For each descriptor, we measured the processing time when executing both keypoin
 |CMake|version >= 3.18||
 |CUDA Toolkit|compute capability >= 6.0|
 |OpenCV|version >= 4.6.0||
-|OpenCV CUDA module|version >= 4.6.0|included in [opencv/opencv_contrib](https://github.com/opencv/opencv_contrib)|
+|OpenCV CUDA module|version >= 4.6.0|included in [opencv/opencv_contrib](https://github.com/opencv/opencv_contrib); required only for the CUDA build|
+|ROCm (HIP)|version >= 6.0|for AMD GPUs; the HIP build needs only OpenCV core/features2d|
 
 ---
 
@@ -93,12 +94,20 @@ $ cmake ../  # Several options available (e.g. -DBUILD_TESTS=ON -DCUDA_ARCHS=86)
 $ make
 ```
 
+To build for AMD GPUs with ROCm/HIP, configure with `-DUSE_HIP=ON` and select the target architectures with `-DCMAKE_HIP_ARCHITECTURES` (e.g. `gfx90a`, `gfx1100`):
+```
+$ cmake ../ -DUSE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx90a
+$ make
+```
+
 ### CMake options
 |Option|Description|Default|
 |---|---|---|
 |BUILD_SAMPLES|Build samples|`ON`|
 |BUILD_TESTS|Build tests|`OFF`|
 |CUDA_ARCHS|List of architectures to generate device code for|`52;61;72;75;86`|
+|USE_HIP|Build with HIP for AMD GPUs (ROCm)|`OFF`|
+|CMAKE_HIP_ARCHITECTURES|AMD GPU architectures to generate device code for (when `USE_HIP=ON`)|`gfx90a`|
 
 ## How to run
 ### `samples`

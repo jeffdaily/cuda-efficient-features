@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(CudaEfficientFeatures)
 
+option(USE_HIP "Build with HIP for AMD GPUs" OFF)
 option(BUILD_SAMPLES "Build samples" ON)
 option(BUILD_TESTS   "Build tests" OFF)
 set(CUDA_ARCHS "52;61;72;75;86" CACHE STRING "List of architectures to generate device code for")
