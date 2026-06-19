@@ -96,9 +96,10 @@ $ make
 
 To build for AMD GPUs with ROCm/HIP, configure with `-DUSE_HIP=ON` and select the target architectures with `-DCMAKE_HIP_ARCHITECTURES` (e.g. `gfx90a`, `gfx1100`):
 ```
-$ cmake ../ -DUSE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx90a
+$ cmake ../ -DUSE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx90a -DCMAKE_PREFIX_PATH=/opt/rocm
 $ make
 ```
+If ROCm is not on your PATH, point -DCMAKE_PREFIX_PATH at your ROCm install so CMake finds the hip* packages.
 
 ### CMake options
 |Option|Description|Default|
