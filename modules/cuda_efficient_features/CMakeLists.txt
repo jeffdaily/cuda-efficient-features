@@ -7,10 +7,9 @@ set(INTERNAL_INCLUDE_DIR ${INTERFACE_INCLUDE_DIR})
 option(USE_HIP "Build with HIP for AMD GPUs" OFF)
 
 if(USE_HIP)
+	# project(LANGUAGES ... HIP) auto-detects the host GPU arch (and errors on
+	# a no-GPU build host); pass -DCMAKE_HIP_ARCHITECTURES=... to override.
 	project(${PROJECT_NAME} LANGUAGES CXX HIP)
-	if(NOT DEFINED CMAKE_HIP_ARCHITECTURES OR CMAKE_HIP_ARCHITECTURES STREQUAL "")
-		set(CMAKE_HIP_ARCHITECTURES "gfx90a")
-	endif()
 else()
 	project(${PROJECT_NAME} LANGUAGES CXX CUDA)
 endif()
